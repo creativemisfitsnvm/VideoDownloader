@@ -1,4 +1,4 @@
-# Video Downloader - installer and updater
+# Misfit Downloader - installer and updater
 #
 # Runs every time the app starts:
 #   1. Pulls the latest scripts from GitHub (only files that changed are replaced)
@@ -21,6 +21,10 @@ $AppDir   = Join-Path $env:LOCALAPPDATA 'VideoDownloader'
 $BinDir   = Join-Path $AppDir 'bin'
 $StateDir = Join-Path $AppDir 'state'
 $ScriptsUpdatedExitCode = 10
+$AppName  = 'Misfit Downloader'
+$AppId    = 'CreativeMisfits.MisfitDownloader'
+$Publisher = 'Creative Misfits'
+$ShortcutsVersion = '2'   # bump to re-create shortcuts on every PC
 
 function Write-Info([string]$msg) { Write-Host $msg -ForegroundColor Cyan }
 function Write-Warn([string]$msg) { Write-Host $msg -ForegroundColor Yellow }
@@ -162,24 +166,102 @@ function Install-MissingTools {
 
 # ---------- Shortcuts ----------
 
-function New-Shortcut([string]$Path, [string]$Script, [string]$Description) {
+# Tags a shortcut with the app's taskbar ID so the taskbar shows the app icon and pins correctly
+$shortcutIdSource = @"
+using System;
+using System.Runtime.InteropServices;
+namespace MisfitDl {
+  [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IPropertyStore {
+    void GetCount(out uint count);
+    void GetAt(uint index, out PropertyKey key);
+    void GetValue(ref PropertyKey key, out PropVariant value);
+    void SetValue(ref PropertyKey key, ref PropVariant value);
+    void Commit();
+  }
+  [StructLayout(LayoutKind.Sequential, Pack = 4)]
+  public struct PropertyKey { public Guid fmtid; public uint pid; }
+  [StructLayout(LayoutKind.Explicit)]
+  public struct PropVariant { [FieldOffset(0)] public ushort vt; [FieldOffset(8)] public IntPtr p; [FieldOffset(16)] public IntPtr pad; }
+  public static class ShortcutId {
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    static extern void SHGetPropertyStoreFromParsingName(string path, IntPtr bindCtx, int flags, ref Guid riid,
+        [MarshalAs(UnmanagedType.Interface)] out IPropertyStore store);
+    public static void Set(string lnkPath, string appId) {
+      Guid iid = typeof(IPropertyStore).GUID;
+      IPropertyStore store;
+      SHGetPropertyStoreFromParsingName(lnkPath, IntPtr.Zero, 2, ref iid, out store);
+      PropertyKey key = new PropertyKey { fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), pid = 5 };
+      PropVariant value = new PropVariant { vt = 31, p = Marshal.StringToCoTaskMemUni(appId) };
+      try { store.SetValue(ref key, ref value); store.Commit(); }
+      finally { Marshal.FreeCoTaskMem(value.p); Marshal.ReleaseComObject(store); }
+    }
+  }
+}
+"@
+
+function New-Shortcut([string]$Path, [string]$Script, [string]$Description, [switch]$App) {
     $ws = New-Object -ComObject WScript.Shell
     $lnk = $ws.CreateShortcut($Path)
     $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $lnk.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $AppDir $Script) + '"'
+    $lnk.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + (Join-Path $AppDir $Script) + '"'
     $lnk.WorkingDirectory = $AppDir
-    $lnk.IconLocation = (Join-Path $BinDir 'yt-dlp.exe') + ',0'
+    $lnk.IconLocation = (Join-Path $AppDir 'logo.ico') + ',0'
     $lnk.Description = $Description
+    $lnk.WindowStyle = 7   # start minimized: no console flash
     $lnk.Save()
+    if ($App) {
+        try {
+            if (-not ('MisfitDl.ShortcutId' -as [type])) { Add-Type -TypeDefinition $shortcutIdSource }
+            [MisfitDl.ShortcutId]::Set($Path, $AppId)
+        } catch { Write-Warn "Could not set taskbar ID on shortcut: $($_.Exception.Message)" }
+    }
+}
+
+function Remove-LegacyShortcuts {
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    $programs = [Environment]::GetFolderPath('Programs')
+    Remove-Item -LiteralPath (Join-Path $desktop 'Video Downloader.lnk') -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $programs 'Video Downloader') -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 function New-Shortcuts {
+    Remove-LegacyShortcuts
     $desktop = [Environment]::GetFolderPath('Desktop')
-    $menu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Video Downloader'
+    $menu = Join-Path ([Environment]::GetFolderPath('Programs')) $AppName
     New-Item -ItemType Directory -Force -Path $menu | Out-Null
-    New-Shortcut (Join-Path $desktop 'Video Downloader.lnk') 'VideoDownloader.ps1' 'Download videos and make edit-ready copies'
-    New-Shortcut (Join-Path $menu 'Video Downloader.lnk') 'VideoDownloader.ps1' 'Download videos and make edit-ready copies'
-    New-Shortcut (Join-Path $menu 'Uninstall Video Downloader.lnk') 'uninstall.ps1' 'Remove Video Downloader'
+    $desc = 'Download videos and make edit-ready copies'
+    New-Shortcut (Join-Path $desktop "$AppName.lnk") 'VideoDownloader.ps1' $desc -App
+    New-Shortcut (Join-Path $menu "$AppName.lnk") 'VideoDownloader.ps1' $desc -App
+    New-Shortcut (Join-Path $menu "Uninstall $AppName.lnk") 'uninstall.ps1' "Remove $AppName"
+    Set-Content -LiteralPath (Join-Path $StateDir 'shortcuts-version.txt') -Value $ShortcutsVersion
+}
+
+# ---------- Installed apps (Settings > Apps) ----------
+
+function Register-App {
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\MisfitDownloader'
+    if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+    $version = '1.0.0'
+    $vf = Join-Path $AppDir 'version.txt'
+    if (Test-Path -LiteralPath $vf) { $version = (Get-Content -LiteralPath $vf -TotalCount 1).Trim() }
+    $sizeKb = [int](((Get-ChildItem -LiteralPath $AppDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum) / 1KB)
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $values = @{
+        DisplayName     = $AppName
+        DisplayVersion  = $version
+        DisplayIcon     = (Join-Path $AppDir 'logo.ico')
+        Publisher       = $Publisher
+        InstallLocation = $AppDir
+        URLInfoAbout    = "https://github.com/$Repo"
+        UninstallString = "`"$ps`" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path $AppDir 'uninstall.ps1')`""
+    }
+    foreach ($k in $values.Keys) { Set-ItemProperty -Path $key -Name $k -Value $values[$k] }
+    foreach ($k in 'NoModify', 'NoRepair') { New-ItemProperty -Path $key -Name $k -Value 1 -PropertyType DWord -Force | Out-Null }
+    New-ItemProperty -Path $key -Name 'EstimatedSize' -Value $sizeKb -PropertyType DWord -Force | Out-Null
+    if (-not (Get-ItemProperty -Path $key -Name 'InstallDate' -ErrorAction SilentlyContinue)) {
+        Set-ItemProperty -Path $key -Name 'InstallDate' -Value (Get-Date -Format 'yyyyMMdd')
+    }
 }
 
 # ---------- Main ----------
@@ -188,7 +270,7 @@ New-Item -ItemType Directory -Force -Path $AppDir, $BinDir, $StateDir | Out-Null
 
 $changed = @()
 try {
-    if ($Install) { Write-Info 'Installing Video Downloader scripts...' }
+    if ($Install) { Write-Info "Installing $AppName..." }
     $changed = Update-Scripts
     if ($changed.Count -gt 0 -and -not $Install) {
         Write-Host ('Updated to the latest version (' + ($changed -join ', ') + ')') -ForegroundColor Green
@@ -209,11 +291,19 @@ try {
     exit 1
 }
 
+# Shortcuts: always on install; otherwise once whenever the shortcut design changes
+$shortcutStamp = Join-Path $StateDir 'shortcuts-version.txt'
+$currentShortcuts = ''
+if (Test-Path -LiteralPath $shortcutStamp) { $currentShortcuts = (Get-Content -LiteralPath $shortcutStamp -TotalCount 1).Trim() }
+if ($Install -or $currentShortcuts -ne $ShortcutsVersion) {
+    try { New-Shortcuts } catch { Write-Warn "Could not create shortcuts: $($_.Exception.Message)" }
+}
+try { Register-App } catch { Write-Warn "Could not add $AppName to Installed apps: $($_.Exception.Message)" }
+
 if ($Install) {
-    New-Shortcuts
     Write-Host ''
-    Write-Host 'Video Downloader is installed.' -ForegroundColor Green
-    Write-Host 'Open it from the "Video Downloader" shortcut on your Desktop or in the Start menu.'
+    Write-Host "$AppName is installed." -ForegroundColor Green
+    Write-Host "Open it from the `"$AppName`" shortcut on your Desktop or in the Start menu."
     exit 0
 }
 

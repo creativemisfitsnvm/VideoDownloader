@@ -1,24 +1,40 @@
-# Removes Video Downloader (the app and its shortcuts).
-# Your downloaded videos in Downloads\Video Downloader are NOT deleted.
+# Removes Misfit Downloader (the app, its shortcuts and its Installed apps entry).
+# Downloaded videos in Downloads\Misfit Downloader are NOT deleted.
 
-$AppDir = Join-Path $env:LOCALAPPDATA 'VideoDownloader'
-$Host.UI.RawUI.WindowTitle = 'Uninstall Video Downloader'
+$AppName = 'Misfit Downloader'
+$AppDir  = Join-Path $env:LOCALAPPDATA 'VideoDownloader'
+$BinDir  = Join-Path $AppDir 'bin'
+Add-Type -AssemblyName PresentationFramework
 
-$answer = Read-Host 'Remove Video Downloader from this PC? Your downloaded videos are kept. (y/n)'
-if ($answer -notmatch '^(y|yes)$') { Write-Host 'Cancelled.'; exit 0 }
+$answer = [System.Windows.MessageBox]::Show(
+    "Remove $AppName from this PC?`n`nYour downloaded videos are kept.", "Uninstall $AppName", 'YesNo', 'Question')
+if ($answer -ne 'Yes') { exit 0 }
+
+# Close the app and any tools it is running, so their files can be deleted
+Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*\VideoDownloader\VideoDownloader.ps1*' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Get-Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -and $_.Path.StartsWith($BinDir, [StringComparison]::OrdinalIgnoreCase) } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 500
 
 # Step out of the app folder so Windows lets us delete it
 Set-Location $env:TEMP
 [Environment]::CurrentDirectory = $env:TEMP
+
 $desktop = [Environment]::GetFolderPath('Desktop')
-$menu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Video Downloader'
-Remove-Item -LiteralPath (Join-Path $desktop 'Video Downloader.lnk') -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $menu -Recurse -Force -ErrorAction SilentlyContinue
+$programs = [Environment]::GetFolderPath('Programs')
+foreach ($name in $AppName, 'Video Downloader') {
+    Remove-Item -LiteralPath (Join-Path $desktop "$name.lnk") -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $programs $name) -Recurse -Force -ErrorAction SilentlyContinue
+}
+Remove-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\MisfitDownloader' -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $AppDir -Recurse -Force -ErrorAction SilentlyContinue
 
 if (Test-Path -LiteralPath $AppDir) {
-    Write-Host "Some files could not be removed. Close Video Downloader and delete this folder: $AppDir" -ForegroundColor Yellow
+    [void][System.Windows.MessageBox]::Show(
+        "Some files could not be removed. Close $AppName and delete this folder:`n$AppDir", "Uninstall $AppName", 'OK', 'Warning')
 } else {
-    Write-Host 'Video Downloader was removed.' -ForegroundColor Green
+    [void][System.Windows.MessageBox]::Show("$AppName was removed.", "Uninstall $AppName", 'OK', 'Information')
 }
-Read-Host 'Press Enter to close'
