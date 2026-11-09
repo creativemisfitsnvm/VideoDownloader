@@ -1,4 +1,9 @@
-<p align="center"><img src="app/logo.png" alt="Misfit Downloader" width="260"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app/logo-dark.png">
+    <img src="app/logo.png" alt="Misfit Downloader" width="260">
+  </picture>
+</p>
 
 # Misfit Downloader
 
@@ -38,6 +43,7 @@ Your files go to **Downloads\Misfit Downloader**:
 
 Options:
 
+- **Dark / light mode:** the sun/moon button at the bottom switches themes. Dark is the default, and your choice is remembered.
 - **Make edit-ready MP4:** turn this off to keep only the original download.
 - **Keep original download:** turn this off to delete the original once its edit-ready copy is made.
 

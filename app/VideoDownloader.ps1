@@ -4,7 +4,8 @@
 param(
     [switch]$NoUpdate,          # skip the update check
     [switch]$Restarted,         # set after a self-update, prevents restart loops
-    [string]$Screenshot = ''    # maintainers: render the window to this PNG and exit
+    [string]$Screenshot = '',   # maintainers: render the window to this PNG and exit
+    [string]$Theme = ''         # Dark or Light: overrides the saved theme (used for screenshots)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -24,6 +25,7 @@ try {
 [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 [DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern int SetCurrentProcessExplicitAppUserModelID(string appID);
+[DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
 '@
     if (-not $Screenshot) {
         [void][MisfitDl.Native]::ShowWindow([MisfitDl.Native]::GetConsoleWindow(), 0)
@@ -50,12 +52,13 @@ $OrigDir = Join-Path $OutDir 'Originals'
 
 # ---------- Settings ----------
 $SettingsFile = Join-Path $StateDir 'settings.json'
-$Settings = [pscustomobject]@{ EditReady = $true; KeepOriginal = $true }
+$Settings = [pscustomobject]@{ EditReady = $true; KeepOriginal = $true; Theme = 'Dark' }
 try {
     if (Test-Path -LiteralPath $SettingsFile) {
         $saved = Get-Content -LiteralPath $SettingsFile -Raw | ConvertFrom-Json
         if ($null -ne $saved.EditReady) { $Settings.EditReady = [bool]$saved.EditReady }
         if ($null -ne $saved.KeepOriginal) { $Settings.KeepOriginal = [bool]$saved.KeepOriginal }
+        if ($saved.Theme -in 'Dark', 'Light') { $Settings.Theme = [string]$saved.Theme }
     }
 } catch { }
 
@@ -63,14 +66,14 @@ try {
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Misfit Downloader" Width="760" Height="760" MinWidth="620" MinHeight="620"
-        WindowStartupLocation="CenterScreen" Background="#F3F3F1"
-        FontFamily="Segoe UI" FontSize="13" Foreground="#161616" UseLayoutRounding="True">
+        Title="Misfit Downloader" Width="760" Height="820" MinWidth="620" MinHeight="680"
+        WindowStartupLocation="CenterScreen" Background="{DynamicResource Bg}"
+        FontFamily="Segoe UI" FontSize="13" Foreground="{DynamicResource Fg}" UseLayoutRounding="True">
   <Window.Resources>
     <Style x:Key="Btn" TargetType="Button">
-      <Setter Property="Background" Value="White"/>
-      <Setter Property="Foreground" Value="#161616"/>
-      <Setter Property="BorderBrush" Value="#CFCFCB"/>
+      <Setter Property="Background" Value="{DynamicResource BtnBg}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Fg}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource BtnBorder}"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="Padding" Value="16,8"/>
       <Setter Property="Cursor" Value="Hand"/>
@@ -91,24 +94,116 @@ try {
       </Setter>
     </Style>
     <Style x:Key="PrimaryBtn" TargetType="Button" BasedOn="{StaticResource Btn}">
-      <Setter Property="Background" Value="#111111"/>
-      <Setter Property="Foreground" Value="White"/>
-      <Setter Property="BorderBrush" Value="#111111"/>
+      <Setter Property="Background" Value="{DynamicResource AccentBg}"/>
+      <Setter Property="Foreground" Value="{DynamicResource AccentFg}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBg}"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="Padding" Value="26,9"/>
     </Style>
+    <Style x:Key="LinkBtn" TargetType="Button" BasedOn="{StaticResource Btn}">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
+      <Setter Property="Foreground" Value="{DynamicResource Muted}"/>
+      <Setter Property="Padding" Value="0,4"/>
+    </Style>
     <Style x:Key="Card" TargetType="Border">
-      <Setter Property="Background" Value="White"/>
+      <Setter Property="Background" Value="{DynamicResource Card}"/>
       <Setter Property="CornerRadius" Value="10"/>
-      <Setter Property="BorderBrush" Value="#E2E2DE"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource CardBorder}"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="Padding" Value="18"/>
       <Setter Property="Margin" Value="0,0,0,14"/>
     </Style>
+    <Style TargetType="TextBox">
+      <Setter Property="Background" Value="{DynamicResource InputBg}"/>
+      <Setter Property="Foreground" Value="{DynamicResource Fg}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource BtnBorder}"/>
+      <Setter Property="CaretBrush" Value="{DynamicResource Fg}"/>
+      <Setter Property="SelectionBrush" Value="{DynamicResource Muted}"/>
+    </Style>
     <Style TargetType="CheckBox">
-      <Setter Property="Margin" Value="0,0,22,0"/>
-      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Foreground" Value="{DynamicResource Fg}"/>
+      <Setter Property="Margin" Value="0,0,24,0"/>
       <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="CheckBox">
+            <StackPanel Orientation="Horizontal" Background="Transparent">
+              <Border x:Name="box" Width="18" Height="18" CornerRadius="4" BorderThickness="1.5" VerticalAlignment="Center"
+                      BorderBrush="{DynamicResource CheckBorder}" Background="{DynamicResource InputBg}">
+                <Path x:Name="mark" Data="M 3,7.5 L 6.3,10.8 L 12,4.5" Stroke="{DynamicResource AccentFg}" StrokeThickness="2"
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Visibility="Collapsed"/>
+              </Border>
+              <ContentPresenter Margin="8,0,0,0" VerticalAlignment="Center"/>
+            </StackPanel>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="box" Property="Background" Value="{DynamicResource AccentBg}"/>
+                <Setter TargetName="box" Property="BorderBrush" Value="{DynamicResource AccentBg}"/>
+                <Setter TargetName="mark" Property="Visibility" Value="Visible"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="ListBoxItem">
+      <Setter Property="Foreground" Value="{DynamicResource Fg}"/>
+      <Setter Property="Padding" Value="8,5"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBoxItem">
+            <Border x:Name="bg" Background="Transparent" CornerRadius="5" Padding="{TemplateBinding Padding}">
+              <ContentPresenter/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="bg" Property="Background" Value="{DynamicResource Hover}"/></Trigger>
+              <Trigger Property="IsSelected" Value="True"><Setter TargetName="bg" Property="Background" Value="{DynamicResource Select}"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="ScrollThumb" TargetType="Thumb">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Thumb">
+            <Border CornerRadius="4" Background="{DynamicResource ScrollThumb}" Margin="2"/>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="ScrollBar">
+      <Setter Property="Width" Value="12"/>
+      <Setter Property="MinWidth" Value="12"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ScrollBar">
+            <Track x:Name="PART_Track" IsDirectionReversed="True">
+              <Track.Thumb><Thumb Style="{StaticResource ScrollThumb}"/></Track.Thumb>
+            </Track>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+      <Style.Triggers>
+        <Trigger Property="Orientation" Value="Horizontal">
+          <Setter Property="Width" Value="Auto"/>
+          <Setter Property="MinWidth" Value="0"/>
+          <Setter Property="Height" Value="12"/>
+          <Setter Property="MinHeight" Value="12"/>
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="ScrollBar">
+                <Track x:Name="PART_Track" IsDirectionReversed="False">
+                  <Track.Thumb><Thumb Style="{StaticResource ScrollThumb}"/></Track.Thumb>
+                </Track>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Trigger>
+      </Style.Triggers>
     </Style>
   </Window.Resources>
 
@@ -132,13 +227,12 @@ try {
       <StackPanel Grid.Column="1" VerticalAlignment="Center">
         <TextBlock Text="Paste links. Get the best quality, plus an edit-ready MP4." FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap"/>
         <TextBlock Text="Edit-ready copies are H.264 + AAC at the original resolution and frame rate, ready for Resolve, After Effects and Premiere."
-                   Foreground="#6B6B66" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                   Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,4,0,0"/>
       </StackPanel>
     </Grid>
 
     <!-- Update banner -->
-    <Border x:Name="Banner" Grid.Row="1" Visibility="Collapsed" Background="#FFF4E5" BorderBrush="#F2C98B" BorderThickness="1"
-            CornerRadius="8" Padding="12,9" Margin="0,0,0,14">
+    <Border x:Name="Banner" Grid.Row="1" Visibility="Collapsed" BorderThickness="1" CornerRadius="8" Padding="12,9" Margin="0,0,0,14">
       <TextBlock x:Name="BannerText" TextWrapping="Wrap"/>
     </Border>
 
@@ -148,8 +242,8 @@ try {
         <TextBlock Text="Video links" FontWeight="SemiBold" Margin="0,0,0,6"/>
         <Grid>
           <TextBox x:Name="UrlBox" Height="96" AcceptsReturn="True" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto"
-                   HorizontalScrollBarVisibility="Auto" Padding="8,6" BorderBrush="#CFCFCB" FontSize="13"/>
-          <TextBlock x:Name="UrlHint" IsHitTestVisible="False" Foreground="#9A9A94" Margin="12,8,0,0" TextWrapping="Wrap"
+                   HorizontalScrollBarVisibility="Auto" Padding="8,6" FontSize="13"/>
+          <TextBlock x:Name="UrlHint" IsHitTestVisible="False" Foreground="{DynamicResource Faint}" Margin="12,8,0,0" TextWrapping="Wrap"
                      Text="Paste one or more links (one per line). YouTube, Vimeo, Instagram, TikTok, X and many more."/>
         </Grid>
         <WrapPanel Margin="0,12,0,0">
@@ -159,7 +253,7 @@ try {
         <DockPanel Margin="0,14,0,0" LastChildFill="False">
           <Button x:Name="PasteBtn" Style="{StaticResource Btn}" Content="Paste" Margin="0,0,8,0" DockPanel.Dock="Left"/>
           <Button x:Name="ClearBtn" Style="{StaticResource Btn}" Content="Clear" DockPanel.Dock="Left"/>
-          <Button x:Name="DownloadBtn" Style="{StaticResource PrimaryBtn}" Content="Download" DockPanel.Dock="Right" IsDefault="False"/>
+          <Button x:Name="DownloadBtn" Style="{StaticResource PrimaryBtn}" Content="Download" DockPanel.Dock="Right"/>
         </DockPanel>
       </StackPanel>
     </Border>
@@ -170,14 +264,14 @@ try {
         <DockPanel LastChildFill="True">
           <Button x:Name="CancelBtn" Style="{StaticResource Btn}" Content="Cancel" DockPanel.Dock="Right" Padding="14,5" IsEnabled="False"/>
           <StackPanel>
-            <TextBlock x:Name="ItemText" Foreground="#6B6B66" FontSize="12" Text="Ready"/>
+            <TextBlock x:Name="ItemText" Foreground="{DynamicResource Muted}" FontSize="12" Text="Ready"/>
             <TextBlock x:Name="TitleText" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis" Margin="0,2,10,0"
                        Text="Paste a link and press Download."/>
           </StackPanel>
         </DockPanel>
         <ProgressBar x:Name="Bar" Height="8" Margin="0,12,0,8" Minimum="0" Maximum="100" Value="0"
-                     Foreground="#111111" Background="#E9E9E5" BorderThickness="0"/>
-        <TextBlock x:Name="StatusText" Foreground="#4A4A46" TextTrimming="CharacterEllipsis" Text=" "/>
+                     Foreground="{DynamicResource AccentBg}" Background="{DynamicResource Track}" BorderThickness="0"/>
+        <TextBlock x:Name="StatusText" Foreground="{DynamicResource Body}" TextTrimming="CharacterEllipsis" Text=" "/>
       </StackPanel>
     </Border>
 
@@ -188,18 +282,19 @@ try {
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="*"/>
           <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <DockPanel Margin="0,0,0,6">
           <TextBlock Text="Finished" FontWeight="SemiBold" DockPanel.Dock="Left"/>
-          <TextBlock Text="Double-click a file to show it in its folder" Foreground="#9A9A94" FontSize="12"
+          <TextBlock Text="Double-click a file to show it in its folder" Foreground="{DynamicResource Faint}" FontSize="12"
                      HorizontalAlignment="Right" VerticalAlignment="Bottom"/>
         </DockPanel>
-        <ListBox x:Name="FinishedList" Grid.Row="1" BorderBrush="#E2E2DE" MinHeight="70"/>
-        <Expander x:Name="DetailsExpander" Grid.Row="2" Header="Details" Margin="0,10,0,0">
-          <TextBox x:Name="LogBox" Height="150" IsReadOnly="True" FontFamily="Consolas" FontSize="11.5"
-                   VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap"
-                   Background="#FAFAF8" BorderBrush="#E2E2DE" Margin="0,6,0,0"/>
-        </Expander>
+        <ListBox x:Name="FinishedList" Grid.Row="1" MinHeight="70" Padding="3"
+                 Background="{DynamicResource InputBg}" Foreground="{DynamicResource Fg}" BorderBrush="{DynamicResource CardBorder}"/>
+        <Button x:Name="DetailsBtn" Grid.Row="2" Style="{StaticResource LinkBtn}" Content="Show details" HorizontalAlignment="Left" Margin="0,8,0,0"/>
+        <TextBox x:Name="LogBox" Grid.Row="3" Height="130" Visibility="Collapsed" IsReadOnly="True" FontFamily="Consolas" FontSize="11.5"
+                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap"
+                 Background="{DynamicResource LogBg}" BorderBrush="{DynamicResource CardBorder}" Margin="0,4,0,0"/>
       </Grid>
     </Border>
 
@@ -207,9 +302,12 @@ try {
     <DockPanel Grid.Row="5" LastChildFill="True">
       <Button x:Name="OpenFolderBtn" Style="{StaticResource Btn}" Content="Open downloads folder" DockPanel.Dock="Right"/>
       <Button x:Name="CheckBtn" Style="{StaticResource Btn}" Content="Check for updates" DockPanel.Dock="Right" Margin="0,0,8,0"/>
+      <Button x:Name="ThemeBtn" Style="{StaticResource Btn}" DockPanel.Dock="Right" Margin="0,0,8,0" Padding="11,8">
+        <TextBlock x:Name="ThemeIcon" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="14" VerticalAlignment="Center"/>
+      </Button>
       <StackPanel VerticalAlignment="Center">
-        <TextBlock x:Name="FooterText" Foreground="#6B6B66" TextTrimming="CharacterEllipsis"/>
-        <TextBlock x:Name="FolderText" Foreground="#9A9A94" FontSize="11.5" TextTrimming="CharacterEllipsis"/>
+        <TextBlock x:Name="FooterText" Foreground="{DynamicResource Muted}" TextTrimming="CharacterEllipsis"/>
+        <TextBlock x:Name="FolderText" Foreground="{DynamicResource Faint}" FontSize="11.5" TextTrimming="CharacterEllipsis"/>
       </StackPanel>
     </DockPanel>
   </Grid>
@@ -219,8 +317,8 @@ try {
 $window = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xaml))
 $ui = @{}
 foreach ($n in 'LogoImage','Banner','BannerText','UrlBox','UrlHint','EditReadyChk','KeepOrigChk','PasteBtn','ClearBtn',
-               'DownloadBtn','CancelBtn','ItemText','TitleText','Bar','StatusText','FinishedList','DetailsExpander',
-               'LogBox','FooterText','FolderText','OpenFolderBtn','CheckBtn') {
+               'DownloadBtn','CancelBtn','ItemText','TitleText','Bar','StatusText','FinishedList','DetailsBtn',
+               'LogBox','FooterText','FolderText','OpenFolderBtn','CheckBtn','ThemeBtn','ThemeIcon') {
     $ui[$n] = $window.FindName($n)
 }
 
@@ -232,9 +330,62 @@ function New-Bitmap([string]$Path) {
     $bmp.EndInit()
     return $bmp
 }
-try { $ui.LogoImage.Source = New-Bitmap (Join-Path $AppDir 'logo.png') } catch { }
 try { $window.Icon = New-Bitmap (Join-Path $AppDir 'logo.ico') } catch { }
 
+# ---------- Themes ----------
+$Palettes = @{
+    Light = @{
+        Bg = '#F3F3F1'; Card = '#FFFFFF'; CardBorder = '#E2E2DE'; Fg = '#161616'; Muted = '#6B6B66'; Faint = '#9A9A94'; Body = '#4A4A46'
+        BtnBg = '#FFFFFF'; BtnBorder = '#CFCFCB'; AccentBg = '#111111'; AccentFg = '#FFFFFF'; InputBg = '#FFFFFF'; LogBg = '#FAFAF8'
+        Track = '#E9E9E5'; CheckBorder = '#A8A8A2'; ScrollThumb = '#C9C9C4'; Hover = '#F1F1EE'; Select = '#E6E6E2'; Error = '#B42318'
+        InfoBg = '#FFF4E5'; InfoBorder = '#F2C98B'; ErrBg = '#FDECEC'; ErrBorder = '#F0A8A8'
+    }
+    Dark = @{
+        Bg = '#121212'; Card = '#1C1C1C'; CardBorder = '#2C2C2C'; Fg = '#F0F0EC'; Muted = '#A3A39D'; Faint = '#77776F'; Body = '#C8C8C2'
+        BtnBg = '#242424'; BtnBorder = '#3A3A3A'; AccentBg = '#F0F0EC'; AccentFg = '#111111'; InputBg = '#161616'; LogBg = '#141414'
+        Track = '#2E2E2E'; CheckBorder = '#5A5A55'; ScrollThumb = '#45453F'; Hover = '#262626'; Select = '#303030'; Error = '#FF8A7A'
+        InfoBg = '#33291A'; InfoBorder = '#6B5426'; ErrBg = '#3A1E1E'; ErrBorder = '#7A3434'
+    }
+}
+
+# Dark title bar on Windows 10 (20H1+) and 11
+function Set-TitleBarTheme {
+    try {
+        $hwnd = (New-Object System.Windows.Interop.WindowInteropHelper $window).Handle
+        if ($hwnd -ne [IntPtr]::Zero) {
+            $dark = [int]($script:ThemeName -eq 'Dark')
+            [void][MisfitDl.Native]::DwmSetWindowAttribute($hwnd, 20, [ref]$dark, 4)
+        }
+    } catch { }
+}
+
+function Set-Theme([string]$Name) {
+    if ($Name -ne 'Light') { $Name = 'Dark' }
+    $script:ThemeName = $Name
+    $palette = $Palettes[$Name]
+    foreach ($key in $palette.Keys) {
+        # ::new (not New-Object): WPF can't use PowerShell-wrapped brush objects
+        $brush = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($palette[$key]))
+        $brush.Freeze()
+        $window.Resources[$key] = $brush.PSObject.BaseObject
+    }
+    # Corner square between two scrollbars
+    $window.Resources[[System.Windows.SystemColors]::ControlBrushKey] = $window.Resources['Card']
+    if ($Name -eq 'Dark') { $logo = 'logo-dark.png' } else { $logo = 'logo.png' }
+    try { $ui.LogoImage.Source = New-Bitmap (Join-Path $AppDir $logo) } catch { }
+    if ($Name -eq 'Dark') {
+        $ui.ThemeIcon.Text = [string][char]0xE706   # sun
+        $ui.ThemeBtn.ToolTip = 'Switch to light mode'
+    } else {
+        $ui.ThemeIcon.Text = [string][char]0xE708   # moon
+        $ui.ThemeBtn.ToolTip = 'Switch to dark mode'
+    }
+    Set-TitleBarTheme
+}
+
+$startTheme = $Settings.Theme
+if ($Theme -in 'Dark', 'Light') { $startTheme = $Theme }
+Set-Theme $startTheme
 $ui.EditReadyChk.IsChecked = $Settings.EditReady
 $ui.KeepOrigChk.IsChecked = $Settings.KeepOriginal
 $ui.KeepOrigChk.IsEnabled = $Settings.EditReady
@@ -250,20 +401,44 @@ function Add-Log([string]$Text) {
 }
 
 function Show-Banner([string]$Text, [string]$Kind) {
-    if ($Kind -eq 'error') {
-        $ui.Banner.Background = '#FDECEC'; $ui.Banner.BorderBrush = '#F0A8A8'
-    } else {
-        $ui.Banner.Background = '#FFF4E5'; $ui.Banner.BorderBrush = '#F2C98B'
-    }
+    if ($Kind -eq 'error') { $bg = 'ErrBg'; $border = 'ErrBorder' } else { $bg = 'InfoBg'; $border = 'InfoBorder' }
+    # Resource references follow theme changes automatically
+    $ui.Banner.SetResourceReference([System.Windows.Controls.Border]::BackgroundProperty, $bg)
+    $ui.Banner.SetResourceReference([System.Windows.Controls.Border]::BorderBrushProperty, $border)
     $ui.BannerText.Text = $Text
     $ui.Banner.Visibility = 'Visible'
 }
 
 function Save-Settings {
     try {
-        [pscustomobject]@{ EditReady = [bool]$ui.EditReadyChk.IsChecked; KeepOriginal = [bool]$ui.KeepOrigChk.IsChecked } |
+        [pscustomobject]@{ EditReady = [bool]$ui.EditReadyChk.IsChecked; KeepOriginal = [bool]$ui.KeepOrigChk.IsChecked; Theme = $script:ThemeName } |
             ConvertTo-Json | Set-Content -LiteralPath $SettingsFile -Encoding UTF8
     } catch { }
+}
+
+# Showing the log makes the window taller (as far as the screen allows) so the Finished list keeps its room
+$script:DetailsGrowth = 0
+function Set-DetailsVisible([bool]$Show) {
+    if ($Show) {
+        if ($ui.LogBox.Visibility -eq 'Visible') { return }
+        $ui.LogBox.Visibility = 'Visible'; $ui.DetailsBtn.Content = 'Hide details'; $ui.LogBox.ScrollToEnd()
+        if ($window.IsLoaded -and $window.WindowState -eq 'Normal') {
+            $area = [System.Windows.SystemParameters]::WorkArea
+            $grow = [Math]::Min(150, $area.Height - $window.ActualHeight)
+            if ($grow -gt 0) {
+                $window.Height = $window.ActualHeight + $grow
+                if ($window.Top + $window.Height -gt $area.Bottom) { $window.Top = [Math]::Max($area.Top, $area.Bottom - $window.Height) }
+                $script:DetailsGrowth = $grow
+            }
+        }
+    } else {
+        if ($ui.LogBox.Visibility -ne 'Visible') { return }
+        $ui.LogBox.Visibility = 'Collapsed'; $ui.DetailsBtn.Content = 'Show details'
+        if ($script:DetailsGrowth -gt 0 -and $window.WindowState -eq 'Normal') {
+            $window.Height = [Math]::Max($window.MinHeight, $window.ActualHeight - $script:DetailsGrowth)
+        }
+        $script:DetailsGrowth = 0
+    }
 }
 
 function Test-Tools {
@@ -578,8 +753,8 @@ function Complete-Downloads {
             $ui.UrlBox.Clear()
         } else {
             $ui.TitleText.Text = ('{0} saved, {1} failed.' -f $sync.Ok, $sync.Failed)
-            $ui.StatusText.Text = 'Open Details below to see what went wrong.'
-            $ui.DetailsExpander.IsExpanded = $true
+            $ui.StatusText.Text = 'See the details below for what went wrong.'
+            Set-DetailsVisible $true
         }
     }
     Update-DownloadButton
@@ -677,6 +852,12 @@ $ui.CancelBtn.Add_Click({
     $ui.StatusText.Text = 'Cancelling...'
     Stop-CurrentTool
 })
+$ui.ThemeBtn.Add_Click({
+    if ($script:ThemeName -eq 'Dark') { Set-Theme 'Light' } else { Set-Theme 'Dark' }
+    Save-Settings
+})
+$ui.DetailsBtn.Add_Click({ Set-DetailsVisible ($ui.LogBox.Visibility -ne 'Visible') })
+$window.Add_SourceInitialized({ Set-TitleBarTheme })
 $ui.CheckBtn.Add_Click({ if (-not $script:Busy -and -not $script:Checking) { Start-UpdateCheck -Manual } })
 $ui.OpenFolderBtn.Add_Click({
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
@@ -714,7 +895,7 @@ $timer.Add_Tick({
         $li.Content = $f.Text
         $li.Tag = $f.Path
         $li.Padding = '6,4'
-        if (-not $f.Ok) { $li.Foreground = '#B42318' }
+        if (-not $f.Ok) { $li.SetResourceReference([System.Windows.Controls.Control]::ForegroundProperty, 'Error') }
         [void]$ui.FinishedList.Items.Add($li)
         $ui.FinishedList.ScrollIntoView($li)
     }
@@ -757,8 +938,12 @@ if ($Screenshot) {
     $host2 = New-Object System.Windows.Controls.Border
     $host2.Resources = $window.Resources
     $host2.Background = $window.Background
+    # Text color and font are normally inherited from the window; give them to the stand-in host
+    $host2.SetResourceReference([System.Windows.Documents.TextElement]::ForegroundProperty, 'Fg')
+    [System.Windows.Documents.TextElement]::SetFontFamily($host2, $window.FontFamily)
+    [System.Windows.Documents.TextElement]::SetFontSize($host2, $window.FontSize)
     $host2.Child = $root
-    $w = 760; $h = 760
+    $w = 760; $h = 840
     $host2.Measure((New-Object System.Windows.Size($w, $h)))
     $host2.Arrange((New-Object System.Windows.Rect(0, 0, $w, $h)))
     $host2.UpdateLayout()
