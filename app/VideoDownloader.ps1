@@ -355,6 +355,21 @@ $WorkerScript = {
         return $p.ExitCode
     }
 
+    # vimeo.com links -> Vimeo's embed player link (keeps the privacy hash of unlisted videos)
+    function Get-VimeoPlayerUrl([string]$Link) {
+        $id = $null; $hash = $null
+        if ($Link -match '^https?://(?:www\.)?vimeo\.com/(\d+)(?:/([0-9a-f]{6,}))?/?(?:[?#].*)?$') {
+            $id = $Matches[1]; $hash = $Matches[2]
+            if (-not $hash -and $Link -match '[?&]h=([0-9a-f]+)') { $hash = $Matches[1] }
+        } elseif ($Link -match '^https?://(?:www\.)?vimeo\.com/(?:channels/[^/]+|groups/[^/]+/videos|showcase/\d+/video|album/\d+/video)/(\d+)/?(?:[?#].*)?$') {
+            $id = $Matches[1]
+        }
+        if (-not $id) { return $null }
+        $player = "https://player.vimeo.com/video/$id"
+        if ($hash) { $player += "?h=$hash" }
+        return $player
+    }
+
     $total = $Urls.Count
     for ($i = 0; $i -lt $total; $i++) {
         if ($sync.Cancel) { break }
@@ -378,9 +393,8 @@ $WorkerScript = {
                   '--newline', '--color', 'never',
                   '--progress-template', 'download:[progress] %(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(info.vcodec)s|%(info.title)s')
         if ($AllowFileUrls) { $argv += '--enable-file-urls' }
-        $argv += $url
 
-        $code = @(Invoke-Tool $ytdlp $argv {
+        $onYtLine = {
             param($line)
             if ($line -match '^\[progress\]\s*(.*)$') {
                 $parts = $Matches[1].Split([char]'|', 5)
@@ -403,7 +417,26 @@ $WorkerScript = {
             } else {
                 Log $line
             }
-        })[-1]
+        }
+
+        # Vimeo's website now needs a login in yt-dlp, but its embed player doesn't:
+        # try the player link first, then the original link (in case a later yt-dlp fixes the site)
+        $attempts = @()
+        $playerUrl = Get-VimeoPlayerUrl $url
+        if ($playerUrl) { $attempts += $playerUrl }
+        $attempts += $url
+
+        $code = 1
+        foreach ($attempt in $attempts) {
+            if ($sync.Cancel) { break }
+            if ($attempt -ne $url) { Log "Vimeo link: using the embed player ($attempt)" }
+            elseif ($attempts.Count -gt 1) { Log 'Trying the original Vimeo link instead...'; $sync.Status = 'Trying another way...' }
+            $code = @(Invoke-Tool $ytdlp ($argv + @($attempt)) $onYtLine)[-1]
+            if (Test-Path -LiteralPath $list) { break }   # something was saved: don't download it twice
+        }
+        if ($code -ne 0 -and $playerUrl) {
+            Log 'Vimeo hint: private, login-only or embed-restricted Vimeo videos cannot be downloaded.'
+        }
 
         if ($sync.Cancel) { Remove-Item -LiteralPath $list -Force -ErrorAction SilentlyContinue; break }
 
