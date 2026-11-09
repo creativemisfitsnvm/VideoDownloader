@@ -1,0 +1,10 @@
+# Never commit tool binaries or downloaded videos
+*.exe
+*.dll
+*.zip
+*.mp4
+*.mkv
+*.webm
+*.mov
+bin/
+Downloads/
