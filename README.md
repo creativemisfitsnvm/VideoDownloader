@@ -83,7 +83,11 @@ docs/screenshot.png       README screenshot
 
 - **Shipping a change:** edit files in `app/`, bump `app/version.txt`, and push to `main`. Everyone gets the change the next time they open the app.
 - **Shortcut changes:** if you change how shortcuts are made, bump `$ShortcutsVersion` in `app/update.ps1` so every PC re-creates them once.
-- **Encoding settings:** `$EditReadyCrf` and `$EditReadyPreset` at the top of `app/make-edit-ready.ps1`.
+- **Encoding settings:** these are at the top of `app/make-edit-ready.ps1`:
+  - `$EditReadyUseGpu`: use the graphics card (on by default)
+  - `$EditReadyNvencCq`: NVIDIA quality, 20 by default
+  - `$EditReadyCrf`: CPU quality, 16 by default
+  - `$EditReadyPreset`: CPU speed, `medium` by default
 - **Screenshot:** run `powershell -STA -File app\VideoDownloader.ps1 -Screenshot docs\screenshot.png` to regenerate it.
 - **Keep scripts ASCII-only.** Windows PowerShell 5.1 misreads non-ASCII characters in files without a BOM.
 - **Tools** are downloaded from official sources and verified against their published SHA-256 checksums:
