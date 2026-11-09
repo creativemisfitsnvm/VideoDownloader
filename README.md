@@ -33,13 +33,23 @@ Installation doesn't need admin rights. It adds a **Misfit Downloader** shortcut
 ## Use
 
 1. Open **Misfit Downloader**.
-2. Paste one or more links, one per line, then click **Download**.
-3. Watch the progress. Finished files are listed at the bottom, and you can double-click one to show it in its folder.
+2. Paste one or more links, one per line, then click **Add to queue**.
+3. Keep adding links whenever you like, even while others are downloading or converting.
 
-Your files go to **Downloads\Misfit Downloader**:
+Downloading and converting run at the same time: while one video is being made edit-ready, the next one is already downloading. The **Queue** list shows each video's status, such as Waiting, Downloading 45%, Converting 30%, Done or Failed. In the list you can:
 
-- `Downloads\Misfit Downloader\`: edit-ready MP4s for your editor.
-- `Downloads\Misfit Downloader\Originals\`: untouched downloads.
+- double-click a finished file to show it in its folder
+- select a video and click **Cancel selected**, or click **Cancel all**
+- click **Clear finished** to tidy up the list
+
+A conversion is saved under a temporary `.converting.mp4` name until it's done, so a cancelled or failed conversion never leaves a half-made file behind.
+
+Your files go to **Downloads\Misfit Downloader** by default:
+
+- `Misfit Downloader\`: edit-ready MP4s for your editor.
+- `Misfit Downloader\Originals\`: untouched downloads.
+
+To save somewhere else, click **Change...** next to **Save to** and pick a folder, such as a project folder or a shared drive. Your choice is remembered, and **Use default** switches back. Links already in the queue keep the folder they were added with.
 
 Options:
 
