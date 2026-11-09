@@ -206,6 +206,7 @@ try {
     <!-- Footer -->
     <DockPanel Grid.Row="5" LastChildFill="True">
       <Button x:Name="OpenFolderBtn" Style="{StaticResource Btn}" Content="Open downloads folder" DockPanel.Dock="Right"/>
+      <Button x:Name="CheckBtn" Style="{StaticResource Btn}" Content="Check for updates" DockPanel.Dock="Right" Margin="0,0,8,0"/>
       <StackPanel VerticalAlignment="Center">
         <TextBlock x:Name="FooterText" Foreground="#6B6B66" TextTrimming="CharacterEllipsis"/>
         <TextBlock x:Name="FolderText" Foreground="#9A9A94" FontSize="11.5" TextTrimming="CharacterEllipsis"/>
@@ -219,7 +220,7 @@ $window = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader
 $ui = @{}
 foreach ($n in 'LogoImage','Banner','BannerText','UrlBox','UrlHint','EditReadyChk','KeepOrigChk','PasteBtn','ClearBtn',
                'DownloadBtn','CancelBtn','ItemText','TitleText','Bar','StatusText','FinishedList','DetailsExpander',
-               'LogBox','FooterText','FolderText','OpenFolderBtn') {
+               'LogBox','FooterText','FolderText','OpenFolderBtn','CheckBtn') {
     $ui[$n] = $window.FindName($n)
 }
 
@@ -286,7 +287,12 @@ function Get-Links {
 function Update-DownloadButton {
     $ui.DownloadBtn.IsEnabled = (-not $script:Busy) -and (-not $script:Checking) -and $script:ToolsReady -and
                                 ((Get-Links).Count -gt 0)
+    $ui.CheckBtn.IsEnabled = (-not $script:Busy) -and (-not $script:Checking)
 }
+
+$AutoCheckHours = 12   # while the app sits open and idle, check for updates this often
+$script:LastUpdateCheck = Get-Date
+$script:ManualCheck = $false
 
 $script:Busy = $false
 $script:Checking = $false
@@ -540,13 +546,16 @@ function Stop-CurrentTool {
 }
 
 # ---------- Update check (pulls new versions from GitHub, installs missing tools) ----------
-function Start-UpdateCheck {
+function Start-UpdateCheck([switch]$Manual) {
     $script:Checking = $true
+    $script:ManualCheck = [bool]$Manual
+    $script:LastUpdateCheck = Get-Date
     $ui.FooterText.Text = 'Checking for updates...'
     Update-DownloadButton
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $PowerShellExe
     $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $AppDir 'update.ps1') + '"'
+    if ($Manual) { $psi.Arguments += ' -CheckAll' }
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.RedirectStandardOutput = $true
@@ -571,7 +580,7 @@ function Step-UpdateCheck {
     $script:Checking = $false
     $script:ToolsReady = Test-Tools
 
-    if ($code -eq 10 -and -not $Restarted) {
+    if ($code -eq 10 -and (-not $Restarted -or $script:ManualCheck)) {
         # New version installed: reopen with it, carrying over any links already typed
         try { Set-Content -LiteralPath (Join-Path $StateDir 'pending-links.txt') -Value $ui.UrlBox.Text -Encoding UTF8 } catch { }
         Start-Process -FilePath $PowerShellExe -WindowStyle Hidden -ArgumentList @(
@@ -586,7 +595,15 @@ function Step-UpdateCheck {
     } elseif ($code -ne 0 -or -not $script:ToolsReady) {
         Show-Banner 'Could not download the tools Misfit Downloader needs. Check your internet connection, then close and reopen the app.' 'error'
     }
-    if ($script:ToolsReady) { $ui.FooterText.Text = "$AppName $Version" }
+    if ($script:ToolsReady) {
+        if ($code -eq 0) { $ui.Banner.Visibility = 'Collapsed' }
+        if ($script:ManualCheck -and $code -eq 0) {
+            $ui.FooterText.Text = "$AppName $Version - up to date (checked $((Get-Date).ToString('h:mm tt')))"
+        } else {
+            $ui.FooterText.Text = "$AppName $Version"
+        }
+    }
+    $script:ManualCheck = $false
     Update-DownloadButton
 }
 
@@ -613,6 +630,7 @@ $ui.CancelBtn.Add_Click({
     $ui.StatusText.Text = 'Cancelling...'
     Stop-CurrentTool
 })
+$ui.CheckBtn.Add_Click({ if (-not $script:Busy -and -not $script:Checking) { Start-UpdateCheck -Manual } })
 $ui.OpenFolderBtn.Add_Click({
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
     Start-Process explorer.exe -ArgumentList ('"' + $OutDir + '"')
@@ -662,6 +680,11 @@ $timer.Add_Tick({
         if ($script:Job -and $script:Job.Handle.IsCompleted) { Complete-Downloads }
     }
     if ($script:UpdProc) { Step-UpdateCheck }
+    # Left open for a long time? Check again, but only while idle with no links typed in
+    elseif (-not $script:Busy -and -not $script:Checking -and $ui.UrlBox.Text.Trim().Length -eq 0 -and
+            ((Get-Date) - $script:LastUpdateCheck).TotalHours -ge $AutoCheckHours) {
+        Start-UpdateCheck
+    }
 })
 
 # ---------- Start ----------

@@ -1,13 +1,15 @@
 # Misfit Downloader - installer and updater
 #
-# Runs every time the app starts:
-#   1. Pulls the latest scripts from GitHub (only files that changed are replaced)
+# Runs every time the app starts (and when you click "Check for updates"):
+#   1. Pulls the latest app files from GitHub (only files that changed are replaced)
 #   2. Makes sure yt-dlp, ffmpeg and node are installed (downloads them if missing)
 #   3. Updates yt-dlp once a day (sites change often)
+#   4. Refreshes node (new LTS release) and ffmpeg (builds older than 30 days) once a week
 #
-# Exit codes: 0 = ok, 10 = scripts were updated (caller restarts), 1 = tools missing
+# Exit codes: 0 = ok, 10 = app files were updated (caller restarts), 1 = tools missing
 param(
     [switch]$Install,        # first-time install: also creates shortcuts
+    [switch]$CheckAll,       # manual check: ignore the daily/weekly timers
     [string]$SourceDir = ''  # install/update from a local copy of the repo instead of GitHub
 )
 
@@ -91,6 +93,65 @@ function Update-Scripts {
 
 # ---------- Tools ----------
 
+$ToolStateFile    = Join-Path $StateDir 'tools.json'
+$ToolCheckDays    = 7    # how often to look for new node / ffmpeg versions
+$FfmpegMaxAgeDays = 30   # ffmpeg publishes builds daily; only replace builds older than this
+$FfmpegZipName    = 'ffmpeg-master-latest-win64-gpl-shared.zip'
+$FfmpegBaseUrl    = 'https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest'
+
+function Read-ToolState {
+    $s = @{ FfmpegSha256 = ''; FfmpegInstalled = ''; LastToolCheck = '' }
+    try {
+        if (Test-Path -LiteralPath $ToolStateFile) {
+            $j = Get-Content -LiteralPath $ToolStateFile -Raw | ConvertFrom-Json
+            foreach ($k in @($s.Keys)) { if ($j.$k) { $s[$k] = [string]$j.$k } }
+        }
+    } catch { }
+    return $s
+}
+
+function Write-ToolState($State) {
+    [pscustomobject]$State | ConvertTo-Json | Set-Content -LiteralPath $ToolStateFile -Encoding UTF8
+}
+
+function ConvertFrom-Stamp([string]$Text) {
+    try { return [datetime]::Parse($Text, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) }
+    catch { return [datetime]::MinValue }
+}
+
+# True if yt-dlp, ffmpeg or node from bin\ is running (files can't be replaced then)
+function Test-ToolsInUse {
+    foreach ($proc in (Get-Process -ErrorAction SilentlyContinue)) {
+        try { if ($proc.Path -and $proc.Path.StartsWith($BinDir + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true } } catch { }
+    }
+    return $false
+}
+
+# Puts new tool files into bin\ all-or-nothing: if any file can't be replaced, the old ones are restored
+function Install-IntoBin([System.IO.FileInfo[]]$Files) {
+    $backup = Join-Path $StateDir ('bin-backup-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $backup | Out-Null
+    $replaced = @(); $added = @()
+    try {
+        foreach ($f in $Files) {
+            $dst = Join-Path $BinDir $f.Name
+            if (Test-Path -LiteralPath $dst) {
+                Move-Item -LiteralPath $dst -Destination (Join-Path $backup $f.Name)
+                $replaced += $f.Name
+            } else {
+                $added += $f.Name
+            }
+            Copy-Item -LiteralPath $f.FullName -Destination $dst
+        }
+    } catch {
+        foreach ($n in ($added + $replaced)) { Remove-Item -LiteralPath (Join-Path $BinDir $n) -Force -ErrorAction SilentlyContinue }
+        foreach ($n in $replaced) { Move-Item -LiteralPath (Join-Path $backup $n) -Destination (Join-Path $BinDir $n) -Force -ErrorAction SilentlyContinue }
+        throw
+    } finally {
+        Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Install-YtDlp {
     Write-Info 'Downloading yt-dlp...'
     $tmp = New-TempDir
@@ -99,7 +160,18 @@ function Install-YtDlp {
         Get-File "$base/yt-dlp.exe" (Join-Path $tmp 'yt-dlp.exe')
         Get-File "$base/SHA2-256SUMS" (Join-Path $tmp 'sums.txt') -Quiet
         Assert-Checksum (Join-Path $tmp 'yt-dlp.exe') (Join-Path $tmp 'sums.txt') 'yt-dlp.exe'
-        Copy-Item -LiteralPath (Join-Path $tmp 'yt-dlp.exe') -Destination $BinDir -Force
+        Install-IntoBin @(Get-Item -LiteralPath (Join-Path $tmp 'yt-dlp.exe'))
+    } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+function Get-FfmpegPublishedHash {
+    $tmp = New-TempDir
+    try {
+        $sums = Join-Path $tmp 'sums.txt'
+        Get-File "$FfmpegBaseUrl/checksums.sha256" $sums -Quiet
+        $line = Get-Content -LiteralPath $sums | Where-Object { $_.Trim() -match ('[\s\*]' + [regex]::Escape($FfmpegZipName) + '$') } | Select-Object -First 1
+        if (-not $line) { throw 'No published checksum found for ffmpeg' }
+        return ($line.Trim() -split '\s+')[0].ToLowerInvariant()
     } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
@@ -107,35 +179,46 @@ function Install-Ffmpeg {
     Write-Info 'Downloading ffmpeg (about 90 MB)...'
     $tmp = New-TempDir
     try {
-        $name = 'ffmpeg-master-latest-win64-gpl-shared.zip'
-        $base = 'https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest'
-        $zip = Join-Path $tmp $name
-        Get-File "$base/$name" $zip
-        Get-File "$base/checksums.sha256" (Join-Path $tmp 'sums.txt') -Quiet
-        Assert-Checksum $zip (Join-Path $tmp 'sums.txt') $name
+        $zip = Join-Path $tmp $FfmpegZipName
+        Get-File "$FfmpegBaseUrl/$FfmpegZipName" $zip
+        Get-File "$FfmpegBaseUrl/checksums.sha256" (Join-Path $tmp 'sums.txt') -Quiet
+        Assert-Checksum $zip (Join-Path $tmp 'sums.txt') $FfmpegZipName
+        $zipHash = Get-Sha256 $zip
         Write-Info 'Extracting ffmpeg...'
         Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $tmp 'x')
         $bin = Get-ChildItem -LiteralPath (Join-Path $tmp 'x') -Recurse -Directory -Filter 'bin' | Select-Object -First 1
         if (-not $bin) { throw 'ffmpeg download did not contain a bin folder' }
-        Get-ChildItem -LiteralPath $bin.FullName -File |
-            Where-Object { $_.Name -ne 'ffplay.exe' } |
-            Copy-Item -Destination $BinDir -Force
+        $new = @(Get-ChildItem -LiteralPath $bin.FullName -File | Where-Object { $_.Name -ne 'ffplay.exe' })
+        Install-IntoBin $new
+        # DLL names include version numbers: remove ones left over from the previous build
+        $keep = $new | ForEach-Object { $_.Name }
+        Get-ChildItem -LiteralPath $BinDir -File -Filter '*.dll' | Where-Object { $keep -notcontains $_.Name } |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+        $state = Read-ToolState
+        $state.FfmpegSha256 = $zipHash
+        $state.FfmpegInstalled = (Get-Date).ToString('o')
+        Write-ToolState $state
     } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
-function Install-Node {
-    Write-Info 'Downloading node (about 80 MB)...'
+function Get-LatestNodeLts {
+    # Assign first: Windows PowerShell 5.1 passes a JSON array down the pipeline as ONE object
+    $releases = Invoke-RestMethod -Uri 'https://nodejs.org/dist/index.json' -TimeoutSec 60
+    $lts = $releases | Where-Object { $_.lts } | Select-Object -First 1
+    if (-not $lts) { throw 'Could not find the current Node.js LTS version' }
+    return $lts.version
+}
+
+function Install-Node([string]$Version = '') {
+    if (-not $Version) { $Version = Get-LatestNodeLts }
+    Write-Info "Downloading node $Version (about 90 MB)..."
     $tmp = New-TempDir
     try {
-        # Assign first: Windows PowerShell 5.1 passes a JSON array down the pipeline as ONE object
-        $releases = Invoke-RestMethod -Uri 'https://nodejs.org/dist/index.json' -TimeoutSec 60
-        $lts = $releases | Where-Object { $_.lts } | Select-Object -First 1
-        if (-not $lts) { throw 'Could not find the current Node.js LTS version' }
-        $base = "https://nodejs.org/dist/$($lts.version)"
+        $base = "https://nodejs.org/dist/$Version"
         Get-File "$base/win-x64/node.exe" (Join-Path $tmp 'node.exe')
         Get-File "$base/SHASUMS256.txt" (Join-Path $tmp 'sums.txt') -Quiet
         Assert-Checksum (Join-Path $tmp 'node.exe') (Join-Path $tmp 'sums.txt') 'win-x64/node.exe'
-        Copy-Item -LiteralPath (Join-Path $tmp 'node.exe') -Destination $BinDir -Force
+        Install-IntoBin @(Get-Item -LiteralPath (Join-Path $tmp 'node.exe'))
     } finally { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
@@ -144,9 +227,9 @@ function Install-MissingTools {
     if (-not (Test-Path -LiteralPath $ytdlp)) {
         Install-YtDlp
     } else {
-        # Self-update yt-dlp at most once a day
+        # Self-update yt-dlp at most once a day (or whenever asked)
         $stamp = Join-Path $StateDir 'yt-dlp-last-update.txt'
-        $due = (-not (Test-Path -LiteralPath $stamp)) -or
+        $due = $CheckAll -or (-not (Test-Path -LiteralPath $stamp)) -or
                (((Get-Date) - (Get-Item -LiteralPath $stamp).LastWriteTime).TotalHours -ge 24)
         if ($due) {
             Write-Info 'Checking for yt-dlp updates...'
@@ -164,6 +247,37 @@ function Install-MissingTools {
     }
 }
 
+# Keeps node and ffmpeg current: checked once a week, or on every manual check
+function Update-ToolsIfDue {
+    $state = Read-ToolState
+    $now = Get-Date
+    if (-not $state.LastToolCheck) {
+        # First run with this feature: start the clocks instead of re-downloading tools that were just installed
+        $state.LastToolCheck = $now.ToString('o')
+        if (-not $state.FfmpegInstalled) { $state.FfmpegInstalled = $now.ToString('o') }
+        Write-ToolState $state
+        if (-not $CheckAll) { return }
+    }
+    if (-not $CheckAll -and ($now - (ConvertFrom-Stamp $state.LastToolCheck)).TotalDays -lt $ToolCheckDays) { return }
+    if (Test-ToolsInUse) { Write-Warn 'A download is running, so ffmpeg/node updates will wait until next time.'; return }
+
+    Write-Info 'Checking for ffmpeg and node updates...'
+    $latestNode = Get-LatestNodeLts
+    $installedNode = ''
+    try { $installedNode = (& (Join-Path $BinDir 'node.exe') --version | Out-String).Trim() } catch { }
+    if ($installedNode -ne $latestNode) {
+        Install-Node $latestNode
+    }
+
+    if (($now - (ConvertFrom-Stamp $state.FfmpegInstalled)).TotalDays -ge $FfmpegMaxAgeDays) {
+        if ((Get-FfmpegPublishedHash) -ne $state.FfmpegSha256) { Install-Ffmpeg }
+    }
+
+    $state = Read-ToolState
+    $state.LastToolCheck = (Get-Date).ToString('o')
+    Write-ToolState $state
+    Write-Info 'Tools are up to date.'
+}
 # ---------- Shortcuts ----------
 
 # Tags a shortcut with the app's taskbar ID so the taskbar shows the app icon and pins correctly
@@ -290,6 +404,8 @@ try {
     Write-Host 'Check your internet connection and try again.' -ForegroundColor Red
     exit 1
 }
+
+try { Update-ToolsIfDue } catch { Write-Warn "Could not update ffmpeg/node right now: $($_.Exception.Message)" }
 
 # Shortcuts: always on install; otherwise once whenever the shortcut design changes
 $shortcutStamp = Join-Path $StateDir 'shortcuts-version.txt'

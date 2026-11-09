@@ -43,10 +43,15 @@ Options:
 
 ## Updates are automatic
 
-Every time the app opens, it:
+Every time the app opens, it checks this repo for a newer version, and it checks again every 12 hours if left open. The repeat check only runs while nothing is downloading and the links box is empty. It also:
 
-- grabs the latest version from this repo and restarts itself if anything changed, and
-- updates yt-dlp once a day, since sites change often.
+- restarts itself on the new version if anything changed, and carries over any links you typed
+- updates **yt-dlp** once a day, since sites change often
+- checks once a week for a new **node** LTS release, and for an **ffmpeg** build if the installed one is more than 30 days old
+
+Click **Check for updates** at the bottom of the window to check right away. That check skips the daily and weekly timers.
+
+Tool updates are all-or-nothing. If a file is in use or a download fails, the old tools stay in place and the update is retried next time.
 
 If a tool goes missing, delete `%LOCALAPPDATA%\VideoDownloader\bin` and reopen the app. It downloads the tools again.
 
