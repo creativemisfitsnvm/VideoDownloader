@@ -123,8 +123,9 @@ function Install-Node {
     Write-Info 'Downloading node (about 80 MB)...'
     $tmp = New-TempDir
     try {
-        $lts = Invoke-RestMethod -Uri 'https://nodejs.org/dist/index.json' -TimeoutSec 60 |
-            Where-Object { $_.lts } | Select-Object -First 1
+        # Assign first: Windows PowerShell 5.1 passes a JSON array down the pipeline as ONE object
+        $releases = Invoke-RestMethod -Uri 'https://nodejs.org/dist/index.json' -TimeoutSec 60
+        $lts = $releases | Where-Object { $_.lts } | Select-Object -First 1
         if (-not $lts) { throw 'Could not find the current Node.js LTS version' }
         $base = "https://nodejs.org/dist/$($lts.version)"
         Get-File "$base/win-x64/node.exe" (Join-Path $tmp 'node.exe')
