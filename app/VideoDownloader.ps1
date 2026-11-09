@@ -442,20 +442,34 @@ $WorkerScript = {
             }
             Log "Edit-ready: $($plan.Summary)"
             $script:duration = $plan.Duration
-            $sync.Status = 'Making edit-ready copy...'
-            if ($script:duration -gt 0) { $sync.Percent = 0.0 }
-
-            $ffArgv = @('-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1') + $plan.Args
-            $fcode = @(Invoke-Tool $ffmpeg $ffArgv {
+            $onProgress = {
                 param($line)
                 if ($line -match '^out_time_us=(\d+)' -and $script:duration -gt 0) {
                     $pct = [math]::Min(100.0, ([double]$Matches[1] / 1000000.0) / $script:duration * 100.0)
                     # ffmpeg can report audio ahead of video; never let the bar move backwards
                     if ($pct -lt $sync.Percent) { $pct = $sync.Percent }
                     $sync.Percent = $pct
-                    $sync.Status = ('Making edit-ready copy   {0:N1}%' -f $pct)
+                    $sync.Status = ('Making edit-ready copy{0}   {1:N1}%' -f $script:engine, $pct)
                 }
-            })[-1]
+            }
+
+            $script:engine = ''
+            if ($plan.Summary -match 'NVIDIA GPU|tone-map: GPU') { $script:engine = ' on the graphics card' }
+            $sync.Status = "Making edit-ready copy$($script:engine)..."
+            if ($script:duration -gt 0) { $sync.Percent = 0.0 }
+            $ffArgv = @('-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1') + $plan.Args
+            $fcode = @(Invoke-Tool $ffmpeg $ffArgv $onProgress)[-1]
+
+            if ($fcode -ne 0 -and -not $sync.Cancel -and $plan.Fallback) {
+                # Graphics card couldn't do it (driver, unsupported format...): do it on the CPU instead
+                Log 'Graphics card conversion failed, retrying on the CPU...'
+                Log "Edit-ready: $($plan.Fallback.Summary)"
+                $script:engine = ' on the CPU'
+                $sync.Status = 'Retrying edit-ready copy on the CPU...'
+                if ($script:duration -gt 0) { $sync.Percent = 0.0 }
+                $ffArgv = @('-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1') + $plan.Fallback.Args
+                $fcode = @(Invoke-Tool $ffmpeg $ffArgv $onProgress)[-1]
+            }
 
             if ($fcode -eq 0 -and -not $sync.Cancel) {
                 $sync.Finished.Enqueue([pscustomobject]@{ Ok = $true; Path = $dst; Text = [System.IO.Path]::GetFileName($dst) })

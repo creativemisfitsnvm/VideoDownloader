@@ -62,7 +62,7 @@ Go to **Settings > Apps > Installed apps > Misfit Downloader > Uninstall**, or *
 ## Notes
 
 - **HDR videos** are tone-mapped to standard (SDR) color in the edit-ready copy so they don't look washed out.
-- **Re-encoding takes time**, especially for long or 4K videos. The progress bar shows how far along it is.
+- **Speed:** on PCs with an NVIDIA graphics card, edit-ready copies are made on the card, which is about 4x faster for 4K HDR. Any graphics card with Vulkan support also tone-maps HDR on the card. Other PCs use the CPU. If a graphics card conversion ever fails, it automatically retries on the CPU. Long 4K videos still take a while, and the progress bar shows how far along it is.
 - **Private or login-only videos** (private Instagram, members-only content and similar) won't download.
 - **DRM services** such as Netflix, Disney+ and Prime Video are not supported.
 
